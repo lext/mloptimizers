@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adam vs SGD</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: white;
+        }
+        
+        h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+        
+        .controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        
+        .control-row {
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+        }
+        
+        label {
+            display: inline-block;
+            width: 150px;
+        }
+        
+        input[type="range"] {
+            width: 200px;
+            margin: 0 10px;
+        }
+        
+        button {
+            padding: 8px 16px;
+            margin-right: 10px;
+            cursor: pointer;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+        }
+        
+        button:hover {
+            background: #f5f5f5;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin-bottom: 20px;
+        }
+        
+        .metrics {
+            font-family: monospace;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        
+        .metric {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        
+        .sgd { color: rgb(255, 99, 132); }
+        .momentum { color: rgb(54, 162, 235); }
+        .adam { color: rgb(153, 102, 255); }
+    </style>
+</head>
+<body>
+    <h1>Adam vs SGD Optimization</h1>
+    
+    <div class="controls">
+        <div class="control-row">
+            <label>SGD LR:</label>
+            <input type="range" id="sgd-lr" min="0.1" max="3" step="0.1" value="0.5">
+            <span id="sgd-lr-val">0.5</span>
+        </div>
+        <div class="control-row">
+            <label>Momentum LR:</label>
+            <input type="range" id="mom-lr" min="0.1" max="3" step="0.1" value="0.5">
+            <span id="mom-lr-val">0.5</span>
+        </div>
+        <div class="control-row">
+            <label>Adam LR:</label>
+            <input type="range" id="adam-lr" min="0.05" max="2" step="0.05" value="0.3">
+            <span id="adam-lr-val">0.3</span>
+        </div>
+        <div class="control-row">
+            <button id="run">Run</button>
+            <button id="step">Step</button>
+            <button id="reset">Reset</button>
+        </div>
+    </div>
+    
+    <div class="chart-container">
+        <canvas id="chart"></canvas>
+    </div>
+    
+    <div class="metrics">
+        <div class="metric">Iteration: <strong id="iter">0</strong>/50</div>
+        <div class="metric sgd">SGD Loss: <strong id="sgd-loss">-</strong></div>
+        <div class="metric momentum">Momentum Loss: <strong id="mom-loss">-</strong></div>
+        <div class="metric adam">Adam Loss: <strong id="adam-loss">-</strong></div>
+    </div>
+
+    <script>
+        // Wait for page load
+        window.addEventListener('load', function() {
+            
+        // Function to optimize
+        function f(x) {
+            return Math.pow(0.1 * x, 2) + 0.05 * Math.cos(Math.PI * x * 2);
+        }
+        
+        function grad_f(x) {
+            return 2 * 0.1 * x * 0.1 - 0.05 * Math.PI * 2 * Math.sin(Math.PI * x * 2);
+        }
+        
+        // Generate smooth function data
+        const functionData = [];
+        for (let x = -8; x <= 2; x += 0.02) {
+            functionData.push({x: x, y: f(x)});
+        }
+        
+        // State
+        let iteration = 0;
+        let animating = false;
+        const maxIter = 50;
+        const initialX = -7.5;
+        
+        let sgd = { x: initialX, history: [{x: initialX, y: f(initialX)}], losses: [f(initialX)] };
+        let momentum = { x: initialX, v: 0, history: [{x: initialX, y: f(initialX)}], losses: [f(initialX)] };
+        let adam = { x: initialX, m: 0, v: 0, history: [{x: initialX, y: f(initialX)}], losses: [f(initialX)] };
+        
+        // Chart setup with high quality rendering
+        const ctx = document.getElementById('chart').getContext('2d');
+        
+        // Enable high quality rendering
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                datasets: [
+                    {
+                        label: 'f(x) = (0.1x)² + 0.05cos(2πx)',
+                        data: functionData,
+                        borderColor: 'rgb(75, 75, 75)',
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHoverRadius: 0,
+                        tension: 0,
+                        order: 4
+                    },
+                    {
+                        label: 'SGD',
+                        data: sgd.history,
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgb(255, 99, 132)',
+                        borderWidth: 2,
+                        pointRadius: 1,
+                        pointHoverRadius: 5,
+                        showLine: true,
+                        tension: 0,
+                        order: 1
+                    },
+                    {
+                        label: 'Momentum',
+                        data: momentum.history,
+                        borderColor: 'rgb(54, 162, 235)',
+                        backgroundColor: 'rgb(54, 162, 235)',
+                        borderWidth: 2,
+                        pointRadius: 1,
+                        pointHoverRadius: 5,
+                        showLine: true,
+                        tension: 0,
+                        order: 2
+                    },
+                    {
+                        label: 'Adam',
+                        data: adam.history,
+                        borderColor: 'rgb(153, 102, 255)',
+                        backgroundColor: 'rgb(153, 102, 255)',
+                        borderWidth: 2,
+                        pointRadius: 1,
+                        pointHoverRadius: 5,
+                        showLine: true,
+                        tension: 0,
+                        order: 3
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                devicePixelRatio: window.devicePixelRatio || 1,
+                interaction: {
+                    mode: 'nearest',
+                    axis: 'x',
+                    intersect: false,
+                },
+                scales: {
+                    x: {
+                        type: 'linear',
+                        position: 'bottom',
+                        min: -8,
+                        max: 2,
+                        ticks: {
+                            stepSize: 1,
+                            font: {
+                                size: 11
+                            }
+                        },
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.05)'
+                        },
+                        title: {
+                            display: true,
+                            text: 'Parameter x',
+                            font: {
+                                size: 14
+                            }
+                        }
+                    },
+                    y: {
+                        min: -0.05,
+                        max: 0.7,
+                        ticks: {
+                            stepSize: 0.1,
+                            font: {
+                                size: 11
+                            }
+                        },
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.05)'
+                        },
+                        title: {
+                            display: true,
+                            text: 'Function value f(x)',
+                            font: {
+                                size: 14
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: {
+                            boxWidth: 20,
+                            padding: 15,
+                            font: {
+                                size: 12
+                            }
+                        }
+                    },
+                    tooltip: {
+                        enabled: true,
+                        mode: 'nearest',
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                label += `(${context.parsed.x.toFixed(3)}, ${context.parsed.y.toFixed(4)})`;
+                                return label;
+                            }
+                        }
+                    }
+                },
+                animation: {
+                    duration: 0
+                },
+                elements: {
+                    line: {
+                        capBezierPoints: false
+                    }
+                }
+            }
+        });
+        
+        // Optimization steps
+        function sgdStep(state, lr) {
+            const grad = grad_f(state.x);
+            state.x = state.x - lr * grad;
+            state.history.push({x: state.x, y: f(state.x)});
+            state.losses.push(f(state.x));
+        }
+        
+        function momentumStep(state, lr, beta = 0.9) {
+            const grad = grad_f(state.x);
+            state.v = beta * state.v - lr * grad;
+            state.x = state.x + state.v;
+            state.history.push({x: state.x, y: f(state.x)});
+            state.losses.push(f(state.x));
+        }
+        
+        function adamStep(state, lr, beta1 = 0.9, beta2 = 0.999, eps = 1e-8) {
+            const grad = grad_f(state.x);
+            const t = state.history.length;
+            
+            state.m = beta1 * state.m + (1 - beta1) * grad;
+            state.v = beta2 * state.v + (1 - beta2) * grad * grad;
+            
+            const m_hat = state.m / (1 - Math.pow(beta1, t));
+            const v_hat = state.v / (1 - Math.pow(beta2, t));
+            
+            state.x = state.x - lr * m_hat / (Math.sqrt(v_hat) + eps);
+            state.history.push({x: state.x, y: f(state.x)});
+            state.losses.push(f(state.x));
+        }
+        
+        function updateChart() {
+            // Update data
+            chart.data.datasets[1].data = sgd.history;
+            chart.data.datasets[2].data = momentum.history;
+            chart.data.datasets[3].data = adam.history;
+            
+            // Highlight last points
+            chart.data.datasets[1].pointRadius = sgd.history.map((_, i) => i === sgd.history.length - 1 ? 4 : 1);
+            chart.data.datasets[2].pointRadius = momentum.history.map((_, i) => i === momentum.history.length - 1 ? 4 : 1);
+            chart.data.datasets[3].pointRadius = adam.history.map((_, i) => i === adam.history.length - 1 ? 4 : 1);
+            
+            chart.update('none');
+        }
+        
+        function step() {
+            if (iteration >= maxIter) return;
+            
+            const sgdLr = parseFloat(document.getElementById('sgd-lr').value);
+            const momLr = parseFloat(document.getElementById('mom-lr').value);
+            const adamLr = parseFloat(document.getElementById('adam-lr').value);
+            
+            sgdStep(sgd, sgdLr);
+            momentumStep(momentum, momLr);
+            adamStep(adam, adamLr);
+            
+            iteration++;
+            updateMetrics();
+            updateChart();
+        }
+        
+        function updateMetrics() {
+            document.getElementById('iter').textContent = iteration;
+            document.getElementById('sgd-loss').textContent = sgd.losses.length > 0 ? sgd.losses[sgd.losses.length - 1].toFixed(6) : '-';
+            document.getElementById('mom-loss').textContent = momentum.losses.length > 0 ? momentum.losses[momentum.losses.length - 1].toFixed(6) : '-';
+            document.getElementById('adam-loss').textContent = adam.losses.length > 0 ? adam.losses[adam.losses.length - 1].toFixed(6) : '-';
+        }
+        
+        function reset() {
+            iteration = 0;
+            sgd = { x: initialX, history: [{x: initialX, y: f(initialX)}], losses: [f(initialX)] };
+            momentum = { x: initialX, v: 0, history: [{x: initialX, y: f(initialX)}], losses: [f(initialX)] };
+            adam = { x: initialX, m: 0, v: 0, history: [{x: initialX, y: f(initialX)}], losses: [f(initialX)] };
+            animating = false;
+            updateMetrics();
+            updateChart();
+        }
+        
+        function animate() {
+            if (!animating || iteration >= maxIter) {
+                animating = false;
+                return;
+            }
+            step();
+            setTimeout(animate, 100);
+        }
+        
+        // Event listeners
+        document.getElementById('run').addEventListener('click', () => {
+            animating = true;
+            animate();
+        });
+        
+        document.getElementById('step').addEventListener('click', step);
+        document.getElementById('reset').addEventListener('click', reset);
+        
+        // Learning rate display
+        ['sgd', 'mom', 'adam'].forEach(opt => {
+            const slider = document.getElementById(`${opt}-lr`);
+            const display = document.getElementById(`${opt}-lr-val`);
+            slider.addEventListener('input', () => {
+                display.textContent = slider.value;
+            });
+        });
+        
+        // Initialize
+        updateChart();
+        
+        }); // End window load
+    </script>
+</body>
+</html>
